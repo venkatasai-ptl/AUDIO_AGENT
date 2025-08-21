@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Bob</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+            margin: 20px;
+            max-width: 900px;
+        }
+
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+
+        .session-pill {
+            display: inline-block;
+            margin-left: 10px;
+            padding: 4px 8px;
+            font-size: 12px;
+            background: #eef6ff;
+            border: 1px solid #bcd8ff;
+            border-radius: 12px;
+            color: #275ea3;
+            max-width: 360px;
+            text-overflow: ellipsis;
+            overflow: hidden;
+            white-space: nowrap;
+            vertical-align: middle;
+        }
+
+        .input-section textarea {
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .btn {
+            margin: 10px 6px 10px 0;
+            padding: 10px 16px;
+            background: #007bff;
+            color: #fff;
+            border: 0;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        #currentOutput {
+            margin-top: 10px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            min-height: 100px;
+            white-space: pre-wrap;
+            background: #f9f9f9;
+            border-radius: 5px;
+        }
+
+        .status {
+            margin: 10px 0;
+            font-style: italic;
+            color: #666;
+            padding: 5px;
+            background: #f0f0f0;
+            border-radius: 3px;
+        }
+
+        .response {
+            margin: 10px 0;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .response strong {
+            color: #007bff;
+            display: block;
+            margin-bottom: 5px;
+            font-size: 0.9em;
+        }
+
+        pre {
+            background: #0b1020;
+            color: #cde3ff;
+            padding: 10px;
+            border-radius: 6px;
+            overflow: auto;
+        }
+
+        .row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center
+        }
+    </style>
+</head>
+
+<body>
+    <h1>
+        Agent Bob
+        <span id="sessionPill" class="session-pill" title="Session ID will appear after starting a session">no
+            session</span>
+    </h1>
+
+    <div class="input-section">
+        <h2>Resume and Job Details</h2>
+        <div>
+            <label for="resume">Resume:</label>
+            <textarea id="resume" rows="6" placeholder="Paste your resume here..."></textarea>
+        </div>
+        <div>
+            <label for="jobDescription">Job Description:</label>
+            <textarea id="jobDescription" rows="6" placeholder="Paste job description here..."></textarea>
+        </div>
+        <button id="startSession" class="btn">Start Session</button>
+    </div>
+
+    <h2>Capture Controls</h2>
+    <div class="row">
+        <button id="mic" class="btn">Microphone</button>
+        <button id="tab" class="btn">Tab (share tab audio)</button>
+        <button id="screen" class="btn">Screen/System Audio</button>
+        <button id="stop" class="btn" disabled>Stop</button>
+    </div>
+    <div class="status" id="status">Not capturing.</div>
+    <pre id="log"></pre>
+
+    <div class="current-response">
+        <h2>Current Response</h2>
+        <div id="currentOutput"></div>
+    </div>
+
+    <div class="historical-responses">
+        <h2>Historical Responses</h2>
+        <div id="historyOutput"><em>No history yet.</em></div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+    <script>
+        // ---------- shared state ----------
+        const LS_KEY = 'agent_bob_session_id';
+        let SESSION_ID = localStorage.getItem(LS_KEY) || null;
+
+        const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws-audio';
+        const FRAME_MS = 30, TARGET_HZ = 16000;
+
+        let ws, audioCtx, workletNode, srcNode, stream, running = false;
+
+        const sessionPill = document.getElementById('sessionPill');
+        const currentOutputDiv = document.getElementById('currentOutput');
+        const historyOutputDiv = document.getElementById('historyOutput');
+        const statusDiv = document.getElementById('status');
+        const logEl = document.getElementById('log');
+
+        function log(...a) { logEl.textContent += a.join(' ') + '\n'; console.log(...a); }
+
+        function setSessionId(sid) {
+            SESSION_ID = sid;
+            if (sid) {
+                localStorage.setItem(LS_KEY, sid);
+                sessionPill.textContent = sid;
+                sessionPill.title = sid;
+            } else {
+                localStorage.removeItem(LS_KEY);
+                sessionPill.textContent = 'no session';
+                sessionPill.title = 'Session ID will appear after starting a session';
+            }
+        }
+
+        async function getActiveSession() {
+            if (SESSION_ID) return SESSION_ID;
+            try {
+                const r = await fetch('/active-session');
+                if (r.ok) {
+                    const d = await r.json();
+                    if (d.session_id) { setSessionId(d.session_id); return d.session_id; }
+                }
+            } catch { }
+            return null;
+        }
+
+        // ---------- Socket.IO (token streaming) ----------
+        const socket = io({ withCredentials: true });
+
+        socket.on('clear', () => {
+            currentOutputDiv.textContent = '';
+            statusDiv.textContent = 'Processing...';
+        });
+
+        socket.on('token', (data) => {
+            currentOutputDiv.textContent += data.token;
+            currentOutputDiv.scrollTop = currentOutputDiv.scrollHeight;
+        });
+
+        socket.on('complete', () => {
+            statusDiv.textContent = 'Response complete!';
+            fetchChatHistory();
+        });
+
+        // ---------- History ----------
+        async function fetchChatHistory() {
+            if (!SESSION_ID) {
+                historyOutputDiv.innerHTML = '<em>No session. Start a session to see history.</em>';
+                return;
+            }
+            try {
+                const r = await fetch('/get_chat_history', { headers: { 'X-Session-Id': SESSION_ID } });
+                const data = await r.json();
+                if (!r.ok) {
+                    historyOutputDiv.innerHTML = `<em>${(data && data.error) || 'No history'}</em>`;
+                    return;
+                }
+                const history = Array.isArray(data) ? data : [];
+                historyOutputDiv.innerHTML = '';
+                if (history.length === 0) {
+                    historyOutputDiv.innerHTML = '<em>No history yet.</em>'; return;
+                }
+                history.forEach(turn => {
+                    const div = document.createElement('div');
+                    div.className = 'response';
+                    div.innerHTML = `
+            <div><strong>${turn.timestamp || ''}</strong></div>
+            <div><strong>User:</strong> ${escapeHtml(turn.user || '')}</div>
+            <div><strong>Response:</strong> ${escapeHtml(turn.assistant || '')}</div>
+            <hr/>`;
+                    historyOutputDiv.appendChild(div);
+                });
+            } catch (e) {
+                historyOutputDiv.innerHTML = `<em>Error fetching history: ${e.message}</em>`;
+            }
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        // ---------- Start session ----------
+        document.getElementById('startSession').addEventListener('click', async () => {
+            const resumeText = document.getElementById('resume').value.trim();
+            const jdText = document.getElementById('jobDescription').value.trim();
+            if (!resumeText || !jdText) { alert('Please fill in both resume and job description fields.'); return; }
+            try {
+                const r = await fetch('/start-session', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ resume: resumeText, job_description: jdText })
+                });
+                const data = await r.json();
+                if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);
+                setSessionId(data.session_id);
+                statusDiv.textContent = 'Session started! You can now capture audio.';
+                historyOutputDiv.innerHTML = '<em>No history yet.</em>';
+                fetchChatHistory();
+            } catch (e) {
+                statusDiv.textContent = `Error: ${e.message}`;
+            }
+        });
+
+        // ---------- Capture (WebAudio -> Worklet -> WS) ----------
+        async function start(mode) {
+            if (running) { log('[info] already running'); return; }
+            const sid = await getActiveSession();
+            if (!sid) { alert('Start a session first.'); return; }
+
+            running = true;
+            // 1) capture
+            try {
+                if (mode === 'mic') {
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        audio: { echoCancellation: true, noiseSuppression: true }, video: false
+                    });
+                } else if (mode === 'tab') {
+                    stream = await navigator.mediaDevices.getDisplayMedia({
+                        video: true, audio: { selfBrowserSurface: 'exclude' }
+                    });
+                } else { // screen/system audio
+                    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+                }
+            } catch (e) {
+                log('[capture] failed:', e && e.message || e);
+                running = false; return;
+            }
+
+            // 2) websocket
+            ws = new WebSocket(WS_URL);
+            ws.binaryType = 'arraybuffer';
+            ws.onopen = () => {
+                ws.send(JSON.stringify({ type: 'hello', session_id: sid, sample_rate: TARGET_HZ, frame_ms: FRAME_MS }));
+                log('[ws] open');
+            };
+            ws.onclose = () => { log('[ws] closed'); };
+            ws.onerror = e => log('[ws] error', e && (e.message || e));
+
+            // 3) worklet → 30ms frames → send
+            audioCtx = new AudioContext();
+            try {
+                await audioCtx.audioWorklet.addModule('/static/pcm_collector.js');
+            } catch (e) {
+                log('[worklet] load failed:', e);
+                await stop(); return;
+            }
+            srcNode = audioCtx.createMediaStreamSource(stream);
+            workletNode = new AudioWorkletNode(audioCtx, 'pcm_collector', {
+                processorOptions: { targetSampleRate: TARGET_HZ, frameMs: FRAME_MS }
+            });
+            workletNode.port.onmessage = (evt) => {
+                if (evt.data?.type === 'frame' && ws?.readyState === WebSocket.OPEN) {
+                    ws.send(evt.data.bytes.buffer);
+                }
+            };
+            srcNode.connect(workletNode);
+
+            document.getElementById('stop').disabled = false;
+            statusDiv.textContent = `Streaming started (${mode})`;
+            log('[info] streaming started:', mode);
+        }
+
+        async function stop() {
+            running = false;
+            try { workletNode?.disconnect(); } catch { }
+            try { srcNode?.disconnect(); } catch { }
+            try { await audioCtx?.close(); } catch { }
+            try { stream?.getTracks().forEach(t => t.stop()); } catch { }
+            try { ws?.close(); } catch { }
+            ws = audioCtx = workletNode = srcNode = stream = null;
+            document.getElementById('stop').disabled = true;
+            statusDiv.textContent = 'Stopped.';
+            log('[info] stopped');
+        }
+
+        document.getElementById('mic').addEventListener('click', () => start('mic'));
+        document.getElementById('tab').addEventListener('click', () => start('tab'));
+        document.getElementById('screen').addEventListener('click', () => start('screen'));
+        document.getElementById('stop').addEventListener('click', stop);
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (!SESSION_ID) await getActiveSession();
+            if (SESSION_ID) setSessionId(SESSION_ID);
+            fetchChatHistory();
+        });
+    </script>
+</body>
+
+</html>

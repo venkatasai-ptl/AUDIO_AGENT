@@ -1,0 +1,46 @@
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+*.log
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# --- Environment & Secrets ---
+.env
+*.env
+
+# --- IDE & Editors ---
+.vscode/
+.idea/
+*.iml
+
+# --- OS Files ---
+.DS_Store
+Thumbs.db
+
+# --- Data & Generated Files ---
+data/recordings/
+data/transcripts/
+data/prompts/
+data/responses/
+data/sessions/
+
+# --- Cache ---
+*.cache
+*.tmp
+
+# --- Node & Frontend (if added later) ---
+node_modules/
+dist/
+build/
+
+# --- Coverage & Test ---
+.coverage
+htmlcov/
+pytest_cache/

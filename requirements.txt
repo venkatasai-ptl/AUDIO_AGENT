@@ -5,4 +5,4 @@ webrtcvad
 python-dotenv
 openai
 requests
-
+setuptools>=65.0.0

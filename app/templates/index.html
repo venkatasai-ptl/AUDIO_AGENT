@@ -111,10 +111,14 @@
     </h1>
 
     <div class="input-section">
-        <h2>Resume and Job Details</h2>
+        <h2>Resume, Projects and Job Details</h2>
         <div>
             <label for="resume">Resume:</label>
             <textarea id="resume" rows="6" placeholder="Paste your resume here..."></textarea>
+        </div>
+        <div>
+            <label for="Projects">Projects:</label>
+            <textarea id="Projects" rows="6" placeholder="Paste your Projects here..."></textarea>
         </div>
         <div>
             <label for="jobDescription">Job Description:</label>
@@ -245,12 +249,13 @@
         // ---------- Start session ----------
         document.getElementById('startSession').addEventListener('click', async () => {
             const resumeText = document.getElementById('resume').value.trim();
+            const ProjectsText = document.getElementById('Projects').value.trim();
             const jdText = document.getElementById('jobDescription').value.trim();
-            if (!resumeText || !jdText) { alert('Please fill in both resume and job description fields.'); return; }
+            if (!resumeText || !ProjectsText || !jdText) { alert('Please fill in both resume, Projects and job description fields.'); return; }
             try {
                 const r = await fetch('/start-session', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ resume: resumeText, job_description: jdText })
+                    body: JSON.stringify({ resume: resumeText, Projects: ProjectsText, job_description: jdText })
                 });
                 const data = await r.json();
                 if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);

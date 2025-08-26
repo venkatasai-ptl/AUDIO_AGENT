@@ -96,6 +96,7 @@ def _write_last_session_id(sid: str):
 def _build_messages_text(session_id: str, transcript: str, max_turns: int = 5) -> str:
     d = DATA / "sessions" / session_id
     resume = (d / "resume.txt").read_text(encoding="utf-8") if (d / "resume.txt").exists() else ""
+    Projects = (d / "Projects.txt").read_text(encoding="utf-8") if (d / "Projects.txt").exists() else ""
     jd     = (d / "job_description.txt").read_text(encoding="utf-8") if (d / "job_description.txt").exists() else ""
     chat_f = _chat_file(session_id)
 
@@ -115,6 +116,9 @@ def _build_messages_text(session_id: str, transcript: str, max_turns: int = 5) -
     return f"""[CONTEXT]
 RESUME:
 {resume}
+
+Projects:
+{Projects}
 
 JOB_DESCRIPTION:
 {jd}
@@ -140,12 +144,13 @@ TRANSCRIPT:
 @fastapi.post("/start-session")
 async def start_session(req: Request):
     data = await req.json()
-    if not data or "resume" not in data or "job_description" not in data:
-        return JSONResponse({"error": "Missing resume or job description"}, status_code=400)
+    if not data or "resume" not in data or "Projects" not in data or "job_description" not in data:
+        return JSONResponse({"error": "Missing resume, Projects or job description"}, status_code=400)
 
     session_id = uuid.uuid4().hex
     d = _ensure_session_dir(session_id)
     (d / "resume.txt").write_text(data["resume"], encoding="utf-8")
+    (d / "Projects.txt").write_text(data["Projects"], encoding="utf-8")
     (d / "job_description.txt").write_text(data["job_description"], encoding="utf-8")
     _write_last_session_id(session_id)
     return {"status": "success", "session_id": session_id, "message": "Session started successfully"}

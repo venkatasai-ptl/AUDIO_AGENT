@@ -16,6 +16,7 @@ import socketio
 
 # ---- bring in YOUR logic (copy these files into app/services) ----
 from app.services.transcribe import transcribe_audio
+from app.services.prompts import build_messages, messages_snapshot
 from app.services.llm import get_llm_response
 
 # ---------------------- config ----------------------
@@ -125,53 +126,6 @@ def _read_last_session_id() -> str | None:
 def _write_last_session_id(sid: str):
     (DATA / "last_session_id.txt").write_text(sid, encoding="utf-8")
 
-def _build_messages_text(session_id: str, transcript: str, max_turns: int = 5) -> str:
-    d = DATA / "sessions" / session_id
-    resume = (d / "resume.txt").read_text(encoding="utf-8") if (d / "resume.txt").exists() else ""
-    Projects = (d / "Projects.txt").read_text(encoding="utf-8") if (d / "Projects.txt").exists() else ""
-    jd     = (d / "job_description.txt").read_text(encoding="utf-8") if (d / "job_description.txt").exists() else ""
-    chat_f = _chat_file(session_id)
-
-    history = []
-    if chat_f.exists():
-        try: history = json.loads(chat_f.read_text(encoding="utf-8")) or []
-        except Exception: history = []
-
-    # last N turns, chronological
-    history = sorted(history, key=lambda t: t.get("timestamp",""))[-max_turns:]
-    hist_lines = [
-        f"- Q: {t.get('user','').strip()}\n  A: {t.get('assistant','').strip()}"
-        for t in history if t.get('user') or t.get('assistant')
-    ]
-    hist_block = "\n".join(hist_lines) if hist_lines else "(none)"
-
-    return f"""[CONTEXT]
-RESUME:
-{resume}
-
-Projects:
-{Projects}
-
-JOB_DESCRIPTION:
-{jd}
-
-[CHAT_HISTORY_LAST_{max_turns}_TURNS]
-{hist_block}
-
-[NEW_PROMPT]
-You are answering the interviewer’s last question based on the transcript below.
-
-TRANSCRIPT:
-{transcript}
-
-[OUTPUT_INSTRUCTIONS]
-- Speak as me, in first person.
-- Be concise and confident. No fluff or hedging. No invented facts.
-- Use STAR when helpful; quantify impact if available.
-- If details are missing, keep them generic but realistic.
-- End with one-line takeaway.
-"""
-
 # ---------------------- HTTP endpoints ----------------------
 @fastapi.post("/start-session")
 async def start_session(req: Request):
@@ -267,7 +221,7 @@ async def ws_audio(ws: WebSocket):
         (DATA / "transcripts" / f"{slug}_{uid}.txt").write_text(text, encoding="utf-8")
 
         # 2) build prompt w/ short history (your format)
-        prompt = _build_messages_text(session_id or "", text, max_turns=5)
+        messages = build_messages(session_id or "", text, DATA, max_turns=5)
 
         # save exact prompt for debugging
         (DATA / "prompts" / f"{slug}_{uid}.json").write_text(
@@ -275,15 +229,18 @@ async def ws_audio(ws: WebSocket):
                 "timestamp": _human_from_slug(slug),
                 "session_id": session_id,
                 "transcript": text,
-                "prompt": prompt
+                "messages": messages
             }, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
-
+        (DATA / "prompts" / f"{slug}_{uid}.txt").write_text(
+            messages_snapshot(messages),
+            encoding="utf-8"
+        )
         # 3) stream tokens via Socket.IO and buffer final
         await sio.emit('clear')
         buf = []
-        for tok in get_llm_response(prompt, stream=True):
+        for tok in get_llm_response(messages, stream=True):
             buf.append(tok)
             await sio.emit('token', {'token': tok})
 

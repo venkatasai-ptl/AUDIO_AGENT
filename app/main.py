@@ -22,8 +22,40 @@ from app.services.llm import get_llm_response
 RATE = 16000
 FRAME_MS = 30
 FRAME_BYTES = int(RATE * FRAME_MS / 1000) * 2  # 960 bytes (16kHz mono s16le)
-SILENCE_SEC = 2.0
+SILENCE_SEC = 2.5
+MIN_TEXT_CHARS = 5          # drop text shorter than this
+MIN_TEXT_TOKENS = 2          # also require at least 2 tokens/words
 SAVE_SEGMENTS = True
+FILLER_PHRASES = {
+    # Short fillers & interjections
+    "um", "uh", "hmm", "mm", "er", "ah", "eh", "huh",
+    "hmmm", "hmm..", "hmm...", "hmmm...", "hmm.", "hmm...",
+    
+    # Common Whisper hallucinations / YouTube-style phrases
+    "thanks for watching",
+    " Thanks for Watching ",
+    "please like",
+    "please like share",
+    "please like share subscribe",
+    "like share subscribe",
+    "subscribe to my channel",
+    "see you in the next video",
+    "see you next time",
+    "check out my other videos",
+    "don't forget to like",
+    "don't forget to subscribe",
+    "hit the bell icon",
+    "smash that like button",
+    "follow for more",
+    "follow me for more",
+    "share and subscribe",
+    "and subscribe",
+    "watch my other videos",
+    "watch next video",
+    "watch next"
+}
+
+
 
 BASE = Path(__file__).resolve().parents[1]
 DATA = BASE / "data"
@@ -200,6 +232,38 @@ async def ws_audio(ws: WebSocket):
 
         # 1) transcribe (your function)
         text = await asyncio.to_thread(transcribe_audio, str(rec_path))
+
+        # --- POST-TRANSCRIPTION GUARD: drop fillers, hallucinations, and empty outputs ---
+        clean = (text or "").strip().lower()
+
+        # Tokenize roughly
+        tokens = [t for t in clean.replace(",", " ").split() if t]
+
+        # Check 1: Empty or whitespace-only transcript
+        if not clean:
+            try:
+                rec_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return
+
+        # Check 2: Too short (very likely meaningless)
+        if len(tokens) < 2 or len(clean) < 12:
+            try:
+                rec_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return
+
+        # Check 3: Filler / hallucination phrases (match anywhere in text)
+        for phrase in FILLER_PHRASES:
+            if clean == phrase:
+                try:
+                    rec_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                return 
+
         (DATA / "transcripts" / f"{slug}_{uid}.txt").write_text(text, encoding="utf-8")
 
         # 2) build prompt w/ short history (your format)

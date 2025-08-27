@@ -35,6 +35,9 @@ FILLER_PHRASES = {
     # Common Whisper hallucinations / YouTube-style phrases
     "thanks for watching",
     " Thanks for Watching ",
+    "Thank you for watching.",
+    "I'll see you in the next video.",
+    "Thank you very much.",
     "please like",
     "please like share",
     "please like share subscribe",

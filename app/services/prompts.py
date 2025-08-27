@@ -2,12 +2,14 @@
 from pathlib import Path
 import json
 
-INTERVIEW_SYSTEM_TEMPLATE = """You are my voice in a job interview.
+SYSTEM_TEMPLATE = """You are my voice in a job interview.
 Speak in the first person ("I"), in a natural, conversational style — like I am sitting across the table.
 
+If earlier content conflicts with later content, prefer the most recent messages—especially the latest user transcript.
+
 Guidelines:
-Length & depth: Give answers with enough substance (2–4 paragraphs).
-Don’t stop at a headline — explain context, process, decisions, and impact.
+Length & depth: Give answers with enough substance (2-4 paragraphs).
+Don't stop at a headline — explain context, process, decisions, and impact.
 
 When asked "how" or "elaborate": go step-by-step, describing tools, design, trade-offs, and lessons learned.
 
@@ -15,7 +17,7 @@ Variety: Mix results with stories. Sometimes highlight metrics, sometimes highli
 
 STAR: Use Situation, Task, Action, Result when helpful, but keep it conversational.
 
-Honesty: Don’t invent fake company names, dates, or facts.
+Honesty: Don't invent fake company names, dates, or facts.
 
 Takeaway: End with a short, natural summary of why it matters.
 """
@@ -40,41 +42,43 @@ def build_messages(session_id: str, transcript: str, data_dir: Path, max_turns: 
         except Exception:
             hist = []
     hist = sorted(hist, key=lambda t: t.get("timestamp", ""))[-max_turns:]
-    hist_lines = [
-        f"- Q: {t.get('user','').strip()}\n  A: {t.get('assistant','').strip()}"
-        for t in hist if t.get('user') or t.get('assistant')
-    ]
-    hist_block = "\n".join(hist_lines) if hist_lines else "(none)"
+    
+    messages: list[dict] = []
+   
+    # 1) System persona + conflict rule
+    messages.append({"role": "system", "content": SYSTEM_TEMPLATE})
 
-    return [
-        {
-            "role": "system",
-            "content": INTERVIEW_SYSTEM_TEMPLATE,
-            "cache_control": {"type": "ephemeral"}  # cached
-        },
-        {
-            "role": "system",
-            "content": f"[RESUME]\n{resume}\n\n[PROJECTS]\n{projects}\n\n[JOB_DESCRIPTION]\n{jd}",
-            "cache_control": {"type": "ephemeral"}  # cached
-        },
-        {
-            "role": "system",
-            "content": f"[CHAT_HISTORY_LAST_{max_turns}_TURNS]\n{hist_block}"
-        },
-        {
-            "role": "user",
-            "content": (
-                "You are answering the interviewer’s last question based on the transcript below.\n\n"
-                f"TRANSCRIPT:\n{transcript}\n\n"
-                "[OUTPUT_INSTRUCTIONS]\n"
-                "- Speak as me, in first person.\n"
-                "- Be concise and confident. No fluff or hedging. No invented facts.\n"
-                "- Use STAR when helpful; quantify impact if available.\n"
-                "- If details are missing, keep them generic but realistic.\n"
-                "- End with one-line takeaway.\n"
-            )
-        }
-    ]
+    # 2) Candidate context (stable prefix helps OpenAI's automatic prompt caching)
+    messages.append({
+        "role": "user",
+        "content": f"HERE IS MY RESUME\n{resume}\n\nHERE IS MY PROJECTS\n{projects}\n\nHERE IS MY JOB_DESCRIPTION\n{jd}"
+    })
+
+    # 3) Prior turns as real chat messages
+    for turn in hist:
+        u = (turn.get("user") or "").strip()
+        a = (turn.get("assistant") or "").strip()
+        if u:
+            messages.append({"role": "user", "content": u})
+        if a:
+            messages.append({"role": "assistant", "content": a})
+
+    # 4) Current transcript LAST
+    messages.append({
+        "role": "user",
+        "content": (
+            "Answer the interviewer’s latest question based on this transcript.\n\n"
+            f"TRANSCRIPT:\n{transcript}\n\n"
+            "[OUTPUT_INSTRUCTIONS]\n"
+            "- Speak as me, in first person.\n"
+            "- Be concise and confident. No fluff or hedging. No invented facts.\n"
+            "- Use STAR when helpful; quantify impact if available.\n"
+            "- If details are missing, keep them generic but realistic.\n"
+            "- End with one-line takeaway.\n"
+        )
+    })
+
+    return messages
 
 
 def messages_snapshot(messages: list[dict]) -> str:

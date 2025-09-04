@@ -109,3 +109,29 @@ Open http://localhost:8001 in your browser to access the application.
 ### Viewing Chat History
 - All chat history per session is stored under `data/sessions/`
 - Previous sessions are displayed in the UI for review
+
+### Notes on `webrtcvad` installation
+
+This project uses [`webrtcvad`](https://pypi.org/project/webrtcvad/) (WebRTC Voice Activity Detection) for real-time speech detection.
+
+- On **Linux/Ubuntu** (or Docker based on Debian/Ubuntu):
+  - Usually installs directly via prebuilt wheels.
+  - If a wheel is not available for your Python version, you just need basic build tools:
+    ```bash
+    sudo apt-get update && sudo apt-get install -y build-essential
+    ```
+  - In Docker, you can add this to your `Dockerfile`:
+    ```dockerfile
+    RUN apt-get update && apt-get install -y --no-install-recommends build-essential
+    ```
+
+- On **Windows**:
+  - If no wheel is available, `pip install webrtcvad` will try to build from source and require
+    [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/).
+  - Common error message:  
+    ```
+    error: Microsoft Visual C++ 14.0 or greater is required.
+    ```
+  - Fix: Install the build tools, or run the project inside Docker/Linux to avoid this.
+
+✅ Tip: For production hosting on Linux/Docker you don’t need Microsoft Build Tools. The compile step (if needed) happens once during image build, not at runtime.

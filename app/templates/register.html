@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Register – Agent Bob</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+            margin: 20px;
+            max-width: 500px;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        .card {
+            padding: 16px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background: #fafafa;
+        }
+
+        .row {
+            display: grid;
+            gap: 10px;
+        }
+
+        input {
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+        }
+
+        .btn {
+            margin-top: 8px;
+            padding: 10px 16px;
+            background: #007bff;
+            color: #fff;
+            border: 0;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        a {
+            color: #007bff;
+            text-decoration: none;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Create your account</h1>
+    <div class="card">
+        <form id="registerForm" class="row" onsubmit="return false;">
+            <input id="regEmail" type="email" placeholder="Email" required />
+            <input id="regPassword" type="password" placeholder="Password" required />
+            <button class="btn" id="regBtn">Create account</button>
+        </form>
+        <p>Already have an account? <a href="/login">Log in</a>.</p>
+    </div>
+
+
+    <script>
+        document.getElementById('registerForm').addEventListener('submit', async () => {
+            const email = document.getElementById('regEmail').value.trim();
+            const password = document.getElementById('regPassword').value;
+            const r = await fetch('/auth/register', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password })
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok) { alert(data?.detail || 'Registration failed'); return; }
+            alert('Account created. You can log in now.');
+            window.location.href = '/login';
+        });
+    </script>
+</body>
+
+</html>

@@ -5,9 +5,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException, status
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel, EmailStr
+from sqlalchemy.orm import Session
+from urllib.parse import parse_qs
 import uvicorn
 import webrtcvad
 
@@ -16,8 +20,16 @@ import socketio
 
 # ---- bring in YOUR logic (copy these files into app/services) ----
 from app.services.transcribe import transcribe_audio
-from app.services.prompts import build_messages, messages_snapshot
+from app.services.prompts import  messages_snapshot, build_messages_from_db
 from app.services.llm import get_llm_response
+from app.services.db import SessionLocal, engine, Base
+from app.services.auth import hash_password, verify_password, create_access_token, decode_token
+from app.services import models
+from app.services.models import User as DBUser
+
+# Create tables automatically at startup
+Base.metadata.create_all(bind=engine)
+
 
 # ---------------------- config ----------------------
 RATE = 16000
@@ -67,6 +79,8 @@ for p in ["recordings", "transcripts", "responses", "prompts", "sessions"]:
     (DATA / p).mkdir(parents=True, exist_ok=True)
 (Path(BASE / "segments")).mkdir(exist_ok=True)
 
+print("Loaded main from:", __file__)
+
 # ---------------------- app wiring ----------------------
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 fastapi = FastAPI()
@@ -76,16 +90,115 @@ app = socketio.ASGIApp(sio, fastapi)
 fastapi.mount("/static", StaticFiles(directory=str(BASE / "app" / "static")), name="static")
 
 @fastapi.get("/")
-async def index():
-    return FileResponse(str(BASE / "app" / "templates" / "index.html"))
+async def root():
+# Optional: redirect root to login or app if token cookie is present (front-end handles token in localStorage)
+   return RedirectResponse(url="/login")
 
-# Return latest session for the capture JS to use
-@fastapi.get("/active-session")
-async def active_session():
-    sid = _read_last_session_id()
-    if not sid:
-        return JSONResponse({"error": "No active session"}, status_code=404)
-    return {"session_id": sid}
+
+@fastapi.get("/register")
+async def register_page():
+   return FileResponse(str(BASE / "app" / "templates" / "register.html"))
+
+
+@fastapi.get("/login")
+async def login_page():
+   return FileResponse(str(BASE / "app" / "templates" / "login.html"))
+
+
+@fastapi.get("/app")
+async def app_page():
+   return FileResponse(str(BASE / "app" / "templates" / "app.html"))
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+class RegisterIn(BaseModel):
+    email: EmailStr
+    password: str
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+def save_turn_db(db: Session, *, user_id, session_id, user_text, assistant_text, tokens=0, meta=None):
+    row = models.Transcript(
+        user_id=user_id,
+        session_id=session_id,
+        text=user_text,
+        assistant_text=assistant_text,
+        tokens=tokens or 0,
+        meta=meta or {}
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+def list_history_db(db: Session, *, user_id, session_id):
+    q = (
+        db.query(models.Transcript)
+        .filter(models.Transcript.user_id == user_id, models.Transcript.session_id == session_id)
+        .order_by(models.Transcript.created_at.desc())
+    )
+    rows = q.all()
+    return [
+        {
+            "timestamp": r.created_at.isoformat(),
+            "user": r.text or "",
+            "assistant": r.assistant_text or "",
+            "id": str(r.id),
+        }
+        for r in rows
+    ]
+# ---------- Auth: routes ----------
+@fastapi.post("/auth/register")
+def register(payload: RegisterIn, db: Session = Depends(get_db)):
+    email = payload.email.lower().strip()
+    if db.query(models.User).filter(models.User.email == email).first():
+        raise HTTPException(status_code=400, detail="Email already registered")
+    u = models.User(email=email, password_hash=hash_password(payload.password))
+    db.add(u); db.commit()
+    return {"ok": True}
+
+@fastapi.post("/auth/login", response_model=TokenOut)
+def login(payload: LoginIn, db: Session = Depends(get_db)):
+    email = payload.email.lower().strip()
+    u = db.query(models.User).filter(models.User.email == email).first()
+    if not u or not verify_password(payload.password, u.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = create_access_token(str(u.id))
+    return TokenOut(access_token=token)
+
+# ---------- Auth: current user dependency ----------
+security = HTTPBearer(auto_error=False)
+
+def get_current_user(
+    creds: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+):
+    if not creds:
+        raise HTTPException(status_code=401, detail="Missing credentials")
+    data = decode_token(creds.credentials)
+    if not data:
+        raise HTTPException(status_code=401, detail="Invalid/expired token")
+    uid = data.get("sub")
+    u = db.get(models.User, uid)
+    if not u or not u.is_active:
+        raise HTTPException(status_code=401, detail="Inactive user")
+    return u
+
+# ---------- Test route to verify auth works ----------
+@fastapi.get("/me")
+def me(user = Depends(get_current_user)):
+    return {"id": str(user.id), "email": user.email}
 
 # ---------------------- helpers ----------------------
 vad = webrtcvad.Vad(3)
@@ -99,63 +212,90 @@ def _wav_from_pcm16(pcm: bytes, rate=RATE) -> bytes:
         wf.writeframes(pcm)
     return buf.getvalue()
 
-def _ts_slug(dt: datetime) -> str:
-    return dt.strftime("%Y%m%d_%H%M%S")
 
-def _human_from_slug(slug: str) -> str:
-    return f"{slug[0:4]}-{slug[4:6]}-{slug[6:8]} {slug[9:11]}:{slug[11:13]}:{slug[13:15]}"
+def _load_profile_and_history(user_id: str | None, session_id: str | None):
+    """Fetch resume/projects/JD and the short chat history for this session."""
+    resume = projects = jd = ""
+    history = []
+    if not user_id:
+        return resume, projects, jd, history
 
-def _ensure_session_dir(session_id: str) -> Path:
-    d = DATA / "sessions" / session_id
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    db: Session = SessionLocal()
+    try:
+        prof = db.get(models.UserProfile, user_id)
+        if prof:
+            resume   = prof.resume or ""
+            projects = prof.projects or ""
+            jd       = prof.job_description or ""
+        if session_id:
+            history = list_history_db(db, user_id=user_id, session_id=session_id)
+    finally:
+        try: db.close()
+        except Exception: pass
+    return resume, projects, jd, history
 
-def _chat_file(session_id: str) -> Path:
-    return _ensure_session_dir(session_id) / "chat.json"
 
-def _append_chat(session_id: str, ts: str, user_text: str, assistant_text: str):
-    f = _chat_file(session_id)
-    hist = []
-    if f.exists():
-        try: hist = json.loads(f.read_text(encoding="utf-8")) or []
-        except Exception: hist = []
-    hist.append({"timestamp": ts, "user": user_text, "assistant": assistant_text})
-    f.write_text(json.dumps(hist, ensure_ascii=False, indent=2), encoding="utf-8")
+# app/main.py
+@fastapi.put("/profile")
+def upsert_profile(payload: dict,
+                   db: Session = Depends(get_db),
+                   user: models.User = Depends(get_current_user)):
+    resume = (payload.get("resume") or "").strip()
+    projects = (payload.get("Projects") or "").strip()
+    jd = (payload.get("job_description") or "").strip()
 
-def _read_last_session_id() -> str | None:
-    p = DATA / "last_session_id.txt"
-    return p.read_text(encoding="utf-8").strip() if p.exists() else None
+    row = db.get(models.UserProfile, user.id)
+    if row:
+        row.resume, row.projects, row.job_description = resume, projects, jd
+    else:
+        row = models.UserProfile(user_id=user.id, resume=resume, projects=projects, job_description=jd)
+        db.add(row)
+    db.commit()
+    return {"ok": True}
 
-def _write_last_session_id(sid: str):
-    (DATA / "last_session_id.txt").write_text(sid, encoding="utf-8")
+@fastapi.get("/profile")
+def get_profile(db: Session = Depends(get_db),
+                user: models.User = Depends(get_current_user)):
+    row = db.get(models.UserProfile, user.id)
+    return {
+        "resume": row.resume if row else "",
+        "Projects": row.projects if row else "",
+        "job_description": row.job_description if row else ""
+    }
 
-# ---------------------- HTTP endpoints ----------------------
-@fastapi.post("/start-session")
-async def start_session(req: Request):
-    data = await req.json()
-    if not data or "resume" not in data or "Projects" not in data or "job_description" not in data:
-        return JSONResponse({"error": "Missing resume, Projects or job description"}, status_code=400)
-
+@fastapi.post("/start-chat")
+def start_chat(db: Session = Depends(get_db),
+               user: models.User = Depends(get_current_user)):
+    # Just mint a fresh session_id and return it; no disk writes.
     session_id = uuid.uuid4().hex
-    d = _ensure_session_dir(session_id)
-    (d / "resume.txt").write_text(data["resume"], encoding="utf-8")
-    (d / "Projects.txt").write_text(data["Projects"], encoding="utf-8")
-    (d / "job_description.txt").write_text(data["job_description"], encoding="utf-8")
-    _write_last_session_id(session_id)
-    return {"status": "success", "session_id": session_id, "message": "Session started successfully"}
+    return {"session_id": session_id}
+
 
 @fastapi.get("/get_chat_history")
-async def get_chat_history(request: Request):
-    sid = request.headers.get("X-Session-Id") or _read_last_session_id()
+def get_chat_history(request: Request,
+                     db: Session = Depends(lambda: SessionLocal()),
+                     user: models.User = Depends(get_current_user)):
+    sid = request.headers.get("X-Session-Id") #or _read_last_session_id()
     if not sid:
         return JSONResponse({"error": "No active session"}, status_code=400)
-    f = _chat_file(sid)
-    hist = []
-    if f.exists():
-        try: hist = json.loads(f.read_text(encoding="utf-8")) or []
-        except Exception: hist = []
-    hist.sort(key=lambda t: t.get("timestamp",""), reverse=True)
-    return hist
+
+    rows = (
+        db.query(models.Transcript)
+          .filter(models.Transcript.user_id == user.id,
+                  models.Transcript.session_id == sid)
+          .order_by(models.Transcript.created_at.desc())
+          .all()
+    )
+
+    return [
+        {
+            "id": str(r.id),
+            "timestamp": r.created_at.isoformat(),
+            "user": r.text or "",
+            "assistant": r.assistant_text or "",
+        }
+        for r in rows
+    ]
 
 # ---------------------- WebSocket: audio -> VAD -> process ----------------------
 @fastapi.websocket("/ws-audio")
@@ -163,12 +303,20 @@ async def ws_audio(ws: WebSocket):
     await ws.accept()
     print("[ws-audio] client connected")
 
+    try:
+        qs = parse_qs(ws.url.query or "")
+        token = (qs.get("token") or [None])[0]
+        claims = decode_token(token or "")
+        user_id = claims.get("sub") if claims else None
+    except Exception:
+        user_id = None
+
     # Initial hello {session_id, sample_rate, frame_ms}
     try:
         hello = json.loads(await ws.receive_text())
-        session_id = hello.get("session_id") or _read_last_session_id()
+        session_id = hello.get("session_id") #or _read_last_session_id()
     except Exception:
-        session_id = _read_last_session_id()
+        session_id = None #_read_last_session_id()
 
     if not session_id:
         print("[ws-audio] no session; audio will be ignored until /start-session is called")
@@ -183,63 +331,35 @@ async def ws_audio(ws: WebSocket):
         frames = []
 
         wav_bytes = _wav_from_pcm16(pcm)
-        now = datetime.now(); slug = _ts_slug(now); uid = uuid.uuid4().hex
-        rec_path = DATA / "recordings" / f"{slug}_{uid}.wav"
-        rec_path.write_bytes(wav_bytes)
+
 
         # 1) transcribe (your function)
-        text = await asyncio.to_thread(transcribe_audio, str(rec_path))
+        text = await asyncio.to_thread(transcribe_audio, wav_bytes)
 
         # --- POST-TRANSCRIPTION GUARD: drop fillers, hallucinations, and empty outputs ---
-        clean = (text or "").strip().lower()
+        clean = (text or "").strip()
 
         # Tokenize roughly
         tokens = [t for t in clean.replace(",", " ").split() if t]
 
         # Check 1: Empty or whitespace-only transcript
         if not clean:
-            try:
-                rec_path.unlink(missing_ok=True)
-            except Exception:
-                pass
             return
 
         # Check 2: Too short (very likely meaningless)
         if len(tokens) < 2 or len(clean) < 12:
-            try:
-                rec_path.unlink(missing_ok=True)
-            except Exception:
-                pass
             return
 
         # Check 3: Filler / hallucination phrases (match anywhere in text)
-        for phrase in FILLER_PHRASES:
-            if clean == phrase:
-                try:
-                    rec_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+        if clean in FILLER_PHRASES:
                 return 
 
-        (DATA / "transcripts" / f"{slug}_{uid}.txt").write_text(text, encoding="utf-8")
 
+        resume, projects, jd, history = _load_profile_and_history(user_id, session_id)
         # 2) build prompt w/ short history (your format)
-        messages = build_messages(session_id or "", text, DATA, max_turns=5)
+        messages = build_messages_from_db(resume=resume, projects=projects, job_description=jd, history=history, transcript=text, max_turns=5)
 
-        # save exact prompt for debugging
-        (DATA / "prompts" / f"{slug}_{uid}.json").write_text(
-            json.dumps({
-                "timestamp": _human_from_slug(slug),
-                "session_id": session_id,
-                "transcript": text,
-                "messages": messages
-            }, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        (DATA / "prompts" / f"{slug}_{uid}.txt").write_text(
-            messages_snapshot(messages),
-            encoding="utf-8"
-        )
+  
         # 3) stream tokens via Socket.IO and buffer final
         await sio.emit('clear')
         buf = []
@@ -248,8 +368,27 @@ async def ws_audio(ws: WebSocket):
             await sio.emit('token', {'token': tok})
 
         full = "".join(buf)
-        (DATA / "responses" / f"{slug}_{uid}.txt").write_text(full, encoding="utf-8")
-        _append_chat(session_id or "", _human_from_slug(slug), text, full)
+
+        if user_id:
+            try:
+                db: Session = SessionLocal()
+                # If you already defined save_turn_db in Step 3, use it:
+                try:
+                    # save_turn_db(db, *, user_id, session_id, user_text, assistant_text, tokens=0, meta=None)
+                
+                    save_turn_db(
+                        db,
+                        user_id=user_id,
+                        session_id=session_id or "",
+                        user_text=text,
+                        assistant_text=full,
+                        tokens=0,
+                        meta={"messages": messages,},
+                    )
+                finally:
+                    db.close()
+            except Exception as e:
+                print("[save_turn_db] error:", e)
         await sio.emit('complete')
 
     try:

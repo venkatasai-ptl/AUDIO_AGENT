@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Login – Agent Bob</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+            margin: 20px;
+            max-width: 500px;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        .card {
+            padding: 16px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background: #fafafa;
+        }
+
+        .row {
+            display: grid;
+            gap: 10px;
+        }
+
+        input {
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+        }
+
+        .btn {
+            margin-top: 8px;
+            padding: 10px 16px;
+            background: #007bff;
+            color: #fff;
+            border: 0;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        a {
+            color: #007bff;
+            text-decoration: none;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Welcome back</h1>
+    <div class="card">
+        <form id="loginForm" class="row" onsubmit="return false;">
+            <input id="loginEmail" type="email" placeholder="Email" required />
+            <input id="loginPassword" type="password" placeholder="Password" required />
+            <button class="btn" id="loginBtn">Log in</button>
+        </form>
+        <p>New here? <a href="/register">Create an account</a>.</p>
+    </div>
+
+
+    <script>
+        const TOKEN_KEY = 'agent_bob_token';
+
+
+        // If already logged in, go straight to app
+        if (localStorage.getItem(TOKEN_KEY)) {
+            window.location.href = '/app';
+        }
+
+
+        document.getElementById('loginForm').addEventListener('submit', async () => {
+            const email = document.getElementById('loginEmail').value.trim();
+            const password = document.getElementById('loginPassword').value;
+            const r = await fetch('/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password })
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok) { alert(data?.detail || 'Login failed'); return; }
+            localStorage.setItem(TOKEN_KEY, data.access_token);
+            window.location.href = '/app';
+        });
+    </script>
+</body>
+
+</html>

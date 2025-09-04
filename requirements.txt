@@ -6,3 +6,9 @@ python-dotenv
 openai
 requests
 setuptools>=65.0.0
+sqlalchemy
+psycopg[binary]
+python-jose[cryptography]
+passlib[bcrypt]
+pydantic
+email-validator

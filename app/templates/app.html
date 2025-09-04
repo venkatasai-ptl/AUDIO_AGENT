@@ -104,6 +104,14 @@
 </head>
 
 <body>
+    <script>
+        // Redirect to login if no token
+        const TOKEN_KEY = 'agent_bob_token';
+        if (!localStorage.getItem(TOKEN_KEY)) {
+            window.location.href = '/login';
+        }
+    </script>
+
     <h1>
         Agent Bob
         <span id="sessionPill" class="session-pill" title="Session ID will appear after starting a session">no
@@ -125,6 +133,9 @@
             <textarea id="jobDescription" rows="6" placeholder="Paste job description here..."></textarea>
         </div>
         <button id="startSession" class="btn">Start Session</button>
+        <button id="saveProfile" class="btn">Save Profile</button>
+        <button id="startChat" class="btn">Start Chat</button>
+        <button id="logoutBtn" class="btn" style="background:#6c757d">Log out</button>
     </div>
 
     <h2>Capture Controls</h2>
@@ -135,7 +146,6 @@
         <button id="stop" class="btn" disabled>Stop</button>
     </div>
     <div class="status" id="status">Not capturing.</div>
-    <!--<pre id="log"></pre>-->
 
     <div class="current-response">
         <h2>Current Response</h2>
@@ -149,6 +159,22 @@
 
     <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
     <script>
+        // --- Minimal auth utilities (no UI here) ---
+        function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
+        function setToken(tok) { if (tok) localStorage.setItem(TOKEN_KEY, tok); else localStorage.removeItem(TOKEN_KEY); }
+        async function authFetch(url, opts = {}) {
+            const token = getToken();
+            const headers = { ...(opts.headers || {}) };
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+            return fetch(url, { ...opts, headers });
+        }
+
+        // --- Logout button
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            setToken('');
+            window.location.href = '/login';
+        });
+
         // ---------- shared state ----------
         const LS_KEY = 'agent_bob_session_id';
         let SESSION_ID = localStorage.getItem(LS_KEY) || null;
@@ -162,71 +188,33 @@
         const currentOutputDiv = document.getElementById('currentOutput');
         const historyOutputDiv = document.getElementById('historyOutput');
         const statusDiv = document.getElementById('status');
-        const logEl = document.getElementById('log');
-
-        function log(...a) { logEl.textContent += a.join(' ') + '\n'; console.log(...a); }
 
         function setSessionId(sid) {
             SESSION_ID = sid;
-            if (sid) {
-                localStorage.setItem(LS_KEY, sid);
-                sessionPill.textContent = sid;
-                sessionPill.title = sid;
-            } else {
-                localStorage.removeItem(LS_KEY);
-                sessionPill.textContent = 'no session';
-                sessionPill.title = 'Session ID will appear after starting a session';
-            }
+            if (sid) { localStorage.setItem(LS_KEY, sid); sessionPill.textContent = sid; sessionPill.title = sid; }
+            else { localStorage.removeItem(LS_KEY); sessionPill.textContent = 'no session'; sessionPill.title = 'Session ID will appear after starting a session'; }
         }
 
         async function getActiveSession() {
-            if (SESSION_ID) return SESSION_ID;
-            try {
-                const r = await fetch('/active-session');
-                if (r.ok) {
-                    const d = await r.json();
-                    if (d.session_id) { setSessionId(d.session_id); return d.session_id; }
-                }
-            } catch { }
-            return null;
+            return SESSION_ID;
         }
 
         // ---------- Socket.IO (token streaming) ----------
         const socket = io({ withCredentials: true });
-
-        socket.on('clear', () => {
-            currentOutputDiv.textContent = '';
-            statusDiv.textContent = 'Processing...';
-        });
-
-        socket.on('token', (data) => {
-            currentOutputDiv.textContent += data.token;
-            currentOutputDiv.scrollTop = currentOutputDiv.scrollHeight;
-        });
-
-        socket.on('complete', () => {
-            statusDiv.textContent = 'Response complete!';
-            fetchChatHistory();
-        });
+        socket.on('clear', () => { currentOutputDiv.textContent = ''; statusDiv.textContent = 'Processing...'; });
+        socket.on('token', (data) => { currentOutputDiv.textContent += data.token; currentOutputDiv.scrollTop = currentOutputDiv.scrollHeight; });
+        socket.on('complete', () => { statusDiv.textContent = 'Response complete!'; fetchChatHistory(); });
 
         // ---------- History ----------
         async function fetchChatHistory() {
-            if (!SESSION_ID) {
-                historyOutputDiv.innerHTML = '<em>No session. Start a session to see history.</em>';
-                return;
-            }
+            if (!SESSION_ID) { historyOutputDiv.innerHTML = '<em>No session. Start a session to see history.</em>'; return; }
             try {
-                const r = await fetch('/get_chat_history', { headers: { 'X-Session-Id': SESSION_ID } });
+                const r = await authFetch('/get_chat_history', { headers: { 'X-Session-Id': SESSION_ID } });
                 const data = await r.json();
-                if (!r.ok) {
-                    historyOutputDiv.innerHTML = `<em>${(data && data.error) || 'No history'}</em>`;
-                    return;
-                }
+                if (!r.ok) { historyOutputDiv.innerHTML = `<em>${(data && data.error) || 'No history'}</em>`; return; }
                 const history = Array.isArray(data) ? data : [];
                 historyOutputDiv.innerHTML = '';
-                if (history.length === 0) {
-                    historyOutputDiv.innerHTML = '<em>No history yet.</em>'; return;
-                }
+                if (history.length === 0) { historyOutputDiv.innerHTML = '<em>No history yet.</em>'; return; }
                 history.forEach(turn => {
                     const div = document.createElement('div');
                     div.className = 'response';
@@ -237,113 +225,114 @@
             <hr/>`;
                     historyOutputDiv.appendChild(div);
                 });
-            } catch (e) {
-                historyOutputDiv.innerHTML = `<em>Error fetching history: ${e.message}</em>`;
-            }
+            } catch (e) { historyOutputDiv.innerHTML = `<em>Error fetching history: ${e.message}</em>`; }
         }
-
-        function escapeHtml(s) {
-            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        }
+        function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
         // ---------- Start session ----------
-        document.getElementById('startSession').addEventListener('click', async () => {
+        // Save Profile -> PUT /profile (overwrite user's resume/projects/JD)
+        document.getElementById('saveProfile').addEventListener('click', async () => {
             const resumeText = document.getElementById('resume').value.trim();
-            const ProjectsText = document.getElementById('Projects').value.trim();
+            const projectsText = document.getElementById('Projects').value.trim();
             const jdText = document.getElementById('jobDescription').value.trim();
-            if (!resumeText || !ProjectsText || !jdText) { alert('Please fill in both resume, Projects and job description fields.'); return; }
+
+            if (!resumeText || !projectsText || !jdText) {
+                alert('Please fill in resume, projects, and job description.');
+                return;
+            }
+
             try {
-                const r = await fetch('/start-session', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ resume: resumeText, Projects: ProjectsText, job_description: jdText })
+                const r = await authFetch('/profile', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        resume: resumeText,
+                        Projects: projectsText,
+                        job_description: jdText
+                    })
                 });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                document.getElementById('status').textContent = 'Profile saved.';
+            } catch (e) {
+                document.getElementById('status').textContent = `Error saving profile: ${e.message}`;
+            }
+        });
+
+        // Start Chat -> POST /start-chat, store session_id, show it in the pill
+        document.getElementById('startChat').addEventListener('click', async () => {
+            try {
+                const r = await authFetch('/start-chat', { method: 'POST' });
                 const data = await r.json();
                 if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);
-                setSessionId(data.session_id);
-                statusDiv.textContent = 'Session started! You can now capture audio.';
-                historyOutputDiv.innerHTML = '<em>No history yet.</em>';
+                setSessionId(data.session_id);      // updates pill + localStorage
+                document.getElementById('status').textContent = 'Chat started! You can now capture audio.';
+                // Optionally refresh history list (it will be empty for a brand-new chat)
                 fetchChatHistory();
             } catch (e) {
-                statusDiv.textContent = `Error: ${e.message}`;
+                document.getElementById('status').textContent = `Error starting chat: ${e.message}`;
             }
         });
 
         // ---------- Capture (WebAudio -> Worklet -> WS) ----------
         async function start(mode) {
-            if (running) { log('[info] already running'); return; }
+            const t = getToken();
+            if (!t) { alert('Please log in first.'); window.location.href = '/login'; return; }
+            if (running) { return; }
             const sid = await getActiveSession();
             if (!sid) { alert('Start a session first.'); return; }
 
             running = true;
             // 1) capture
+            let stream;
             try {
                 if (mode === 'mic') {
-                    stream = await navigator.mediaDevices.getUserMedia({
-                        audio: { echoCancellation: true, noiseSuppression: true }, video: false
-                    });
+                    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
                 } else if (mode === 'tab') {
-                    stream = await navigator.mediaDevices.getDisplayMedia({
-                        video: true, audio: { selfBrowserSurface: 'exclude' }
-                    });
-                } else { // screen/system audio
+                    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { selfBrowserSurface: 'exclude' } });
+                } else {
                     stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
                 }
             } catch (e) {
-                log('[capture] failed:', e && e.message || e);
                 running = false; return;
             }
 
             // 2) websocket
-            ws = new WebSocket(WS_URL);
+            const token = getToken();
+            const wsUrl = WS_URL + (token ? ('?token=' + encodeURIComponent(token)) : '');
+            const ws = new WebSocket(wsUrl);
             ws.binaryType = 'arraybuffer';
-            ws.onopen = () => {
-                ws.send(JSON.stringify({ type: 'hello', session_id: sid, sample_rate: TARGET_HZ, frame_ms: FRAME_MS }));
-                log('[ws] open');
-            };
-            ws.onclose = () => { log('[ws] closed'); };
-            ws.onerror = e => log('[ws] error', e && (e.message || e));
+            ws.onopen = () => { ws.send(JSON.stringify({ type: 'hello', session_id: sid, sample_rate: TARGET_HZ, frame_ms: FRAME_MS })); };
 
             // 3) worklet → 30ms frames → send
-            audioCtx = new AudioContext();
-            try {
-                await audioCtx.audioWorklet.addModule('/static/pcm_collector.js');
-            } catch (e) {
-                log('[worklet] load failed:', e);
-                await stop(); return;
-            }
-            srcNode = audioCtx.createMediaStreamSource(stream);
-            workletNode = new AudioWorkletNode(audioCtx, 'pcm_collector', {
-                processorOptions: { targetSampleRate: TARGET_HZ, frameMs: FRAME_MS }
-            });
+            const audioCtx = new AudioContext();
+            try { await audioCtx.audioWorklet.addModule('/static/pcm_collector.js'); }
+            catch { await stop(); return; }
+            const srcNode = audioCtx.createMediaStreamSource(stream);
+            const workletNode = new AudioWorkletNode(audioCtx, 'pcm_collector', { processorOptions: { targetSampleRate: TARGET_HZ, frameMs: FRAME_MS } });
             workletNode.port.onmessage = (evt) => {
-                if (evt.data?.type === 'frame' && ws?.readyState === WebSocket.OPEN) {
-                    ws.send(evt.data.bytes.buffer);
-                }
+                if (evt.data?.type === 'frame' && ws?.readyState === WebSocket.OPEN) { ws.send(evt.data.bytes.buffer); }
             };
             srcNode.connect(workletNode);
 
             document.getElementById('stop').disabled = false;
-            statusDiv.textContent = `Streaming started (${mode})`;
-            log('[info] streaming started:', mode);
-        }
+            document.getElementById('status').textContent = `Streaming started (${mode})`;
 
-        async function stop() {
-            running = false;
-            try { workletNode?.disconnect(); } catch { }
-            try { srcNode?.disconnect(); } catch { }
-            try { await audioCtx?.close(); } catch { }
-            try { stream?.getTracks().forEach(t => t.stop()); } catch { }
-            try { ws?.close(); } catch { }
-            ws = audioCtx = workletNode = srcNode = stream = null;
-            document.getElementById('stop').disabled = true;
-            statusDiv.textContent = 'Stopped.';
-            log('[info] stopped');
+            async function stop() {
+                try { workletNode?.disconnect(); } catch { }
+                try { srcNode?.disconnect(); } catch { }
+                try { await audioCtx?.close(); } catch { }
+                try { stream?.getTracks().forEach(t => t.stop()); } catch { }
+                try { ws?.close(); } catch { }
+                document.getElementById('stop').disabled = true;
+                document.getElementById('status').textContent = 'Stopped.';
+                running = false;
+            }
+            document.getElementById('stop').onclick = stop;
         }
 
         document.getElementById('mic').addEventListener('click', () => start('mic'));
         document.getElementById('tab').addEventListener('click', () => start('tab'));
         document.getElementById('screen').addEventListener('click', () => start('screen'));
-        document.getElementById('stop').addEventListener('click', stop);
 
         document.addEventListener('DOMContentLoaded', async () => {
             if (!SESSION_ID) await getActiveSession();

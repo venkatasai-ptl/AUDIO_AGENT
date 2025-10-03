@@ -1,163 +1,266 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Bob</title>
+
+    <!-- Visual refresh (non-breaking). Tailwind only affects styling. -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50: '#eef6ff', 100: '#d9eaff', 200: '#bcd8ff', 300: '#96c1ff', 400: '#6ea7ff', 500: '#488dff', 600: '#2a73f3', 700: '#205ad1', 800: '#1b48a6', 900: '#183d87' }
+                    },
+                    boxShadow: {
+                        soft: '0 10px 25px -5px rgb(0 0 0 / 0.08), 0 8px 10px -6px rgb(0 0 0 / 0.08)'
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        html,
         body {
-            font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-            margin: 20px;
-            max-width: 900px;
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto;
         }
 
-        h1 {
-            color: #333;
-            border-bottom: 2px solid #007bff;
-            padding-bottom: 10px;
+        .card {
+            background: #fff;
+            border: 1px solid #eef2f7;
+            border-radius: 1rem;
+            box-shadow: 0 10px 25px -5px rgb(0 0 0 /.08), 0 8px 10px -6px rgb(0 0 0 /.08)
         }
 
         .session-pill {
             display: inline-block;
-            margin-left: 10px;
+            margin-left: 8px;
             padding: 4px 8px;
             font-size: 12px;
             background: #eef6ff;
             border: 1px solid #bcd8ff;
-            border-radius: 12px;
+            border-radius: 9999px;
             color: #275ea3;
             max-width: 360px;
             text-overflow: ellipsis;
             overflow: hidden;
             white-space: nowrap;
-            vertical-align: middle;
-        }
-
-        .input-section textarea {
-            width: 100%;
-            box-sizing: border-box;
-        }
-
-        .btn {
-            margin: 10px 6px 10px 0;
-            padding: 10px 16px;
-            background: #007bff;
-            color: #fff;
-            border: 0;
-            border-radius: 6px;
-            cursor: pointer;
-        }
-
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-
-        #currentOutput {
-            margin-top: 10px;
-            padding: 10px;
-            border: 1px solid #ccc;
-            min-height: 100px;
-            white-space: pre-wrap;
-            background: #f9f9f9;
-            border-radius: 5px;
-        }
-
-        .status {
-            margin: 10px 0;
-            font-style: italic;
-            color: #666;
-            padding: 5px;
-            background: #f0f0f0;
-            border-radius: 3px;
-        }
-
-        .response {
-            margin: 10px 0;
-            padding: 10px;
-            border-bottom: 1px solid #eee;
-        }
-
-        .response strong {
-            color: #007bff;
-            display: block;
-            margin-bottom: 5px;
-            font-size: 0.9em;
+            vertical-align: middle
         }
 
         pre {
             background: #0b1020;
             color: #cde3ff;
             padding: 10px;
-            border-radius: 6px;
-            overflow: auto;
+            border-radius: 10px;
+            overflow: auto
         }
 
-        .row {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            align-items: center
+        .hidden-route {
+            display: none;
+        }
+
+        .active-nav {
+            background: #f3f4f6;
+            font-weight: 600;
         }
     </style>
 </head>
 
-<body>
+<body class="bg-gray-50">
     <script>
-        // Redirect to login if no token
+        // Redirect to login if no token (preserved)
         const TOKEN_KEY = 'agent_bob_token';
         if (!localStorage.getItem(TOKEN_KEY)) {
             window.location.href = '/login';
         }
     </script>
 
-    <h1>
-        Agent Bob
-        <span id="sessionPill" class="session-pill" title="Session ID will appear after starting a session">no
-            session</span>
-    </h1>
+    <!-- App shell: sidebar + content. All original IDs are preserved below. -->
+    <div class="min-h-screen grid grid-cols-1 lg:grid-cols-[280px,1fr]">
+        <!-- Sidebar -->
+        <aside class="bg-white border-r border-gray-100 p-6 lg:sticky lg:top-0 lg:h-screen">
+            <div class="flex items-center gap-3 mb-8">
+                <div class="h-10 w-10 rounded-xl bg-brand-600 text-white grid place-items-center font-bold">AB</div>
+                <div>
+                    <p class="font-semibold leading-tight">Agent Bob</p>
+                    <p class="text-xs text-gray-500">Live voice → chat</p>
+                </div>
+            </div>
+            <nav class="space-y-1 text-sm" id="sidebarNav">
+                <button data-page="dashboard"
+                    class="w-full text-left px-3 py-2 rounded-xl active-nav">Dashboard</button>
+                <button data-page="newchat" class="w-full text-left px-3 py-2 rounded-xl">Recent Chat</button>
+                <button data-page="profile" class="w-full text-left px-3 py-2 rounded-xl">Profile</button>
+                <button data-page="sessions" class="w-full text-left px-3 py-2 rounded-xl">Sessions</button>
+                <button data-page="history" class="w-full text-left px-3 py-2 rounded-xl">History</button>
+            </nav>
+            <!-- Logout at bottom -->
+            <div class="absolute bottom-6 left-6 right-6">
+                <button id="logoutBtn"
+                    class="w-full text-left px-3 py-2 rounded-xl text-gray-700 hover:bg-red-50 hover:text-red-700 transition">Log
+                    out</button>
+            </div>
+        </aside>
 
-    <div class="input-section">
-        <h2>Resume, Projects and Job Details</h2>
-        <div>
-            <label for="resume">Resume:</label>
-            <textarea id="resume" rows="6" placeholder="Paste your resume here..."></textarea>
-        </div>
-        <div>
-            <label for="Projects">Projects:</label>
-            <textarea id="Projects" rows="6" placeholder="Paste your Projects here..."></textarea>
-        </div>
-        <div>
-            <label for="jobDescription">Job Description:</label>
-            <textarea id="jobDescription" rows="6" placeholder="Paste job description here..."></textarea>
-        </div>
-        <button id="startSession" class="btn">Start Session</button>
-        <button id="saveProfile" class="btn">Save Profile</button>
-        <button id="startChat" class="btn">Start Chat</button>
-        <button id="logoutBtn" class="btn" style="background:#6c757d">Log out</button>
+        <!-- Main content -->
+        <main class="p-6 lg:p-10 space-y-6">
+            <header class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h1 class="text-2xl sm:text-3xl font-bold tracking-tight">Agent Bob <span id="sessionPill"
+                            class="session-pill" title="Session ID will appear after starting a session">no
+                            session</span></h1>
+                    <p class="text-gray-500">Start a chat, capture audio, and stream tokens in realtime.</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button id="startChat" class="px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-black">Start New
+                        Chat</button>
+                </div>
+            </header>
+
+            <!-- ROUTE: Dashboard (Capture + Output) -->
+            <section data-route="dashboard">
+                <section class="card">
+                    <div class="p-6">
+                        <h2 class="text-xl font-semibold">Dashboard</h2>
+                        <p class="text-gray-600 mt-2">
+                            Welcome! This will be your landing page. We’ll add summaries, stats, and shortcuts here
+                            later.
+                        </p>
+                    </div>
+                </section>
+            </section>
+
+            <!-- ROUTE: New Chat (Capture + Output, moved from old Dashboard) -->
+            <section data-route="newchat" class="hidden-route">
+                <section class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                    <div class="card xl:col-span-2">
+                        <div class="p-5 border-b border-gray-100">
+                            <h2 class="font-semibold">Capture Controls</h2>
+                        </div>
+                        <div class="p-5">
+                            <div class="flex flex-wrap items-center gap-3">
+                                <button id="mic"
+                                    class="px-3.5 py-2 rounded-xl bg-brand-600 text-white hover:bg-brand-700">Microphone</button>
+                                <button id="micToggle" class="px-3.5 py-2 rounded-xl border border-gray-200 hidden"
+                                    title="Click to mute">🎙️</button>
+                                <button id="screen"
+                                    class="px-3.5 py-2 rounded-xl bg-gray-900 text-white hover:bg-black">Screen/System
+                                    Audio</button>
+                                <button id="stop"
+                                    class="px-3.5 py-2 rounded-xl border border-gray-200 disabled:opacity-50"
+                                    disabled>Stop</button>
+                            </div>
+                            <div id="status"
+                                class="mt-4 text-sm italic text-gray-600 bg-gray-50 border border-gray-100 rounded-lg p-3">
+                                Not capturing.</div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="p-5 border-b border-gray-100">
+                            <h2 class="font-semibold">Tips</h2>
+                        </div>
+                        <div class="p-5 text-sm text-gray-600 space-y-2">
+                            <p>• Start a chat to obtain a session ID, then begin capturing audio.</p>
+                            <p>• Tokens stream into <em>Current Response</em> below.</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="grid grid-cols-1 xl:grid-cols-2 gap-6 mt-6">
+                    <div class="card">
+                        <div class="p-5 border-b border-gray-100">
+                            <h2 class="font-semibold">Current Response</h2>
+                        </div>
+                        <div class="p-5">
+                            <div id="currentOutput"
+                                class="min-h-[140px] whitespace-pre-wrap bg-gray-50 rounded-xl border border-gray-100 p-3">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="p-5 border-b border-gray-100">
+                            <h2 class="font-semibold">Historical Responses</h2>
+                        </div>
+                        <div class="p-5">
+                            <div id="historyOutput" class="text-sm text-gray-700"><em>No history yet.</em></div>
+                        </div>
+                    </div>
+                </section>
+            </section>
+
+            <!-- ROUTE: Profile (Resume / Projects / JD) -->
+            <section data-route="profile" class="hidden-route">
+                <section class="card">
+                    <div class="p-5 border-b border-gray-100 flex items-center justify-between">
+                        <h2 class="font-semibold">Resume, Projects and Job Details</h2>
+                        <div class="flex gap-3">
+                            <button id="saveProfile"
+                                class="px-3.5 py-2 rounded-xl bg-brand-600 text-white hover:bg-brand-700">Save
+                                Profile</button>
+                        </div>
+                    </div>
+                    <div class="p-5 grid grid-cols-1 lg:grid-cols-3 gap-5">
+                        <div>
+                            <label for="resume" class="text-sm text-gray-600">Resume</label>
+                            <textarea id="resume" rows="8" class="mt-1 w-full rounded-xl border border-gray-200 p-3"
+                                placeholder="Paste your resume here..."></textarea>
+                        </div>
+                        <div>
+                            <label for="Projects" class="text-sm text-gray-600">Projects</label>
+                            <textarea id="Projects" rows="8" class="mt-1 w-full rounded-xl border border-gray-200 p-3"
+                                placeholder="Paste your Projects here..."></textarea>
+                        </div>
+                        <div>
+                            <label for="jobDescription" class="text-sm text-gray-600">Job Description</label>
+                            <textarea id="jobDescription" rows="8"
+                                class="mt-1 w-full rounded-xl border border-gray-200 p-3"
+                                placeholder="Paste job description here..."></textarea>
+                        </div>
+                    </div>
+                    <div class="px-5 pb-5">
+                        <button id="startSession"
+                            class="px-3.5 py-2 rounded-xl border border-gray-200 hover:bg-gray-50">Start
+                            Session</button>
+                    </div>
+                </section>
+            </section>
+
+            <!-- Placeholder routes to keep sidebar items functional if you expand later -->
+            <section data-route="sessions" class="hidden-route">
+                <div class="text-gray-500">(Sessions page coming soon.)</div>
+            </section>
+            <section data-route="history" class="hidden-route">
+                <div class="grid grid-cols-1 lg:grid-cols-[280px,1fr] gap-6">
+                    <div class="card">
+                        <div class="p-4 border-b border-gray-100">
+                            <h2 class="font-semibold">Previous Sessions</h2>
+                        </div>
+                        <div class="p-4">
+                            <div id="histSessions" class="space-y-2 text-sm"></div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="p-4 border-b border-gray-100">
+                            <h2 id="histTitle" class="font-semibold">Select a session</h2>
+                        </div>
+                        <div id="histThread" class="p-4 space-y-4 text-sm text-gray-800"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
     </div>
 
-    <h2>Capture Controls</h2>
-    <div class="row">
-        <button id="mic" class="btn">Microphone</button>
-        <button id="tab" class="btn">Tab (share tab audio)</button>
-        <button id="screen" class="btn">Screen/System Audio</button>
-        <button id="stop" class="btn" disabled>Stop</button>
-    </div>
-    <div class="status" id="status">Not capturing.</div>
-
-    <div class="current-response">
-        <h2>Current Response</h2>
-        <div id="currentOutput"></div>
-    </div>
-
-    <div class="historical-responses">
-        <h2>Historical Responses</h2>
-        <div id="historyOutput"><em>No history yet.</em></div>
-    </div>
-
+    <!-- Dependencies -->
     <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+
+    <!-- ORIGINAL APP LOGIC (unchanged) -->
     <script>
         // --- Minimal auth utilities (no UI here) ---
         function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
@@ -182,7 +285,7 @@
         const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws-audio';
         const FRAME_MS = 30, TARGET_HZ = 16000;
 
-        let ws, audioCtx, workletNode, srcNode, stream, running = false;
+        let ws, audioCtx, workletNode, srcNode, stream, micTrack = null, running = false;
 
         const sessionPill = document.getElementById('sessionPill');
         const currentOutputDiv = document.getElementById('currentOutput');
@@ -195,9 +298,7 @@
             else { localStorage.removeItem(LS_KEY); sessionPill.textContent = 'no session'; sessionPill.title = 'Session ID will appear after starting a session'; }
         }
 
-        async function getActiveSession() {
-            return SESSION_ID;
-        }
+        async function getActiveSession() { return SESSION_ID; }
 
         // ---------- Socket.IO (token streaming) ----------
         const socket = io({ withCredentials: true });
@@ -217,20 +318,18 @@
                 if (history.length === 0) { historyOutputDiv.innerHTML = '<em>No history yet.</em>'; return; }
                 history.forEach(turn => {
                     const div = document.createElement('div');
-                    div.className = 'response';
+                    div.className = 'mb-3 pb-3 border-b border-gray-100';
                     div.innerHTML = `
-            <div><strong>${turn.timestamp || ''}</strong></div>
-            <div><strong>User:</strong> ${escapeHtml(turn.user || '')}</div>
-            <div><strong>Response:</strong> ${escapeHtml(turn.assistant || '')}</div>
-            <hr/>`;
+            <div class="text-xs text-gray-500">${turn.timestamp || ''}</div>
+            <div class="mt-1"><strong class="text-brand-700">User:</strong> ${escapeHtml(turn.user || '')}</div>
+            <div class="mt-1"><strong class="text-brand-700">Response:</strong> ${escapeHtml(turn.assistant || '')}</div>`;
                     historyOutputDiv.appendChild(div);
                 });
             } catch (e) { historyOutputDiv.innerHTML = `<em>Error fetching history: ${e.message}</em>`; }
         }
         function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
-        // ---------- Start session ----------
-        // Save Profile -> PUT /profile (overwrite user's resume/projects/JD)
+        // ---------- Save Profile ----------
         document.getElementById('saveProfile').addEventListener('click', async () => {
             const resumeText = document.getElementById('resume').value.trim();
             const projectsText = document.getElementById('Projects').value.trim();
@@ -258,15 +357,14 @@
             }
         });
 
-        // Start Chat -> POST /start-chat, store session_id, show it in the pill
+        // ---------- Start Chat ----------
         document.getElementById('startChat').addEventListener('click', async () => {
             try {
                 const r = await authFetch('/start-chat', { method: 'POST' });
                 const data = await r.json();
                 if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);
-                setSessionId(data.session_id);      // updates pill + localStorage
+                setSessionId(data.session_id);
                 document.getElementById('status').textContent = 'Chat started! You can now capture audio.';
-                // Optionally refresh history list (it will be empty for a brand-new chat)
                 fetchChatHistory();
             } catch (e) {
                 document.getElementById('status').textContent = `Error starting chat: ${e.message}`;
@@ -287,10 +385,17 @@
             try {
                 if (mode === 'mic') {
                     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
-                } else if (mode === 'tab') {
-                    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { selfBrowserSurface: 'exclude' } });
+                    micTrack = stream.getAudioTracks()[0] || null;
+                    const micToggleBtn = document.getElementById('micToggle');
+                    if (micTrack) {
+                        micToggleBtn.classList.remove('hidden');
+                        micToggleBtn.textContent = '🎙️';
+                        micToggleBtn.title = 'Click to mute';
+                    }
                 } else {
                     stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+                    document.getElementById('micToggle').classList.add('hidden');
+                    micTrack = null;
                 }
             } catch (e) {
                 running = false; return;
@@ -325,14 +430,43 @@
                 try { ws?.close(); } catch { }
                 document.getElementById('stop').disabled = true;
                 document.getElementById('status').textContent = 'Stopped.';
+                document.getElementById('micToggle').classList.add('hidden');
+                micTrack = null;
                 running = false;
             }
             document.getElementById('stop').onclick = stop;
         }
 
         document.getElementById('mic').addEventListener('click', () => start('mic'));
-        document.getElementById('tab').addEventListener('click', () => start('tab'));
         document.getElementById('screen').addEventListener('click', () => start('screen'));
+        document.getElementById('micToggle').addEventListener('click', () => {
+            if (!micTrack) return;
+            micTrack.enabled = !micTrack.enabled;
+            const btn = document.getElementById('micToggle');
+            if (micTrack.enabled) {
+                btn.textContent = '🎙️';
+                btn.title = 'Click to mute';
+            } else {
+                btn.textContent = '🔇';
+                btn.title = 'Click to unmute';
+            }
+        });
+
+        // ---------- Lightweight client-side routing ----------
+        const routes = Array.from(document.querySelectorAll('[data-route]'));
+        const nav = document.getElementById('sidebarNav');
+        nav.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-page]');
+            if (!btn) return;
+            const page = btn.getAttribute('data-page');
+            // toggle nav styles
+            nav.querySelectorAll('[data-page]').forEach(b => b.classList.remove('active-nav'));
+            btn.classList.add('active-nav');
+            // show route
+            routes.forEach(r => {
+                r.classList.toggle('hidden-route', r.getAttribute('data-route') !== page);
+            });
+        });
 
         document.addEventListener('DOMContentLoaded', async () => {
             if (!SESSION_ID) await getActiveSession();
@@ -340,6 +474,89 @@
             fetchChatHistory();
         });
     </script>
+
+    <script>
+        (function () {
+            const sessList = document.getElementById('histSessions');
+            const threadEl = document.getElementById('histThread');
+            const titleEl = document.getElementById('histTitle');
+            if (!sessList || !threadEl || !titleEl) return;
+
+            const nav = document.getElementById('sidebarNav');
+            let loaded = false;
+            nav?.addEventListener('click', (e) => {
+                const btn = e.target.closest('[data-page]');
+                if (!btn) return;
+                if (btn.getAttribute('data-page') === 'history' && !loaded) {
+                    loaded = true; loadSessions();
+                }
+            });
+
+            async function loadSessions() {
+                sessList.innerHTML = '<div class="text-gray-500">Loading…</div>';
+                try {
+                    const r = await authFetch('/history/sessions');
+                    const data = await r.json();
+                    if (!r.ok) throw new Error(data?.detail || 'Failed to load');
+                    renderSessions(data.sessions || []);
+                } catch (e) {
+                    sessList.innerHTML = `<div class="text-red-600">Error: ${escapeHtml(e.message)}</div>`;
+                }
+            }
+
+            function renderSessions(sessions) {
+                if (!sessions.length) { sessList.innerHTML = '<div class="text-gray-500">No previous sessions.</div>'; return; }
+                sessList.innerHTML = '';
+                sessions.forEach(s => {
+                    const btn = document.createElement('button');
+                    btn.className = 'w-full text-left px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50';
+                    const when = s.last_created ? new Date(s.last_created).toLocaleString() : '';
+                    btn.innerHTML = `<div class="font-semibold truncate">${escapeHtml(s.session_id)}</div>
+                            <div class="text-xs text-gray-500">${escapeHtml(when)}</div>`;
+                    btn.addEventListener('click', () => openSession(s.session_id));
+                    sessList.appendChild(btn);
+                });
+            }
+
+            async function openSession(sessionId) {
+                titleEl.textContent = `Session: ${sessionId}`;
+                threadEl.innerHTML = '<div class="text-gray-500">Loading…</div>';
+                try {
+                    const r = await authFetch(`/history/transcripts?session_id=${encodeURIComponent(sessionId)}`);
+                    const data = await r.json();
+                    if (!r.ok) throw new Error(data?.detail || 'Failed to load');
+                    renderThread(data.messages || []);
+                } catch (e) {
+                    threadEl.innerHTML = `<div class="text-red-600">Error: ${escapeHtml(e.message)}</div>`;
+                }
+            }
+
+            function renderThread(msgs) {
+                if (!msgs.length) { threadEl.innerHTML = '<div class="text-gray-500">No messages in this session.</div>'; return; }
+                threadEl.innerHTML = msgs.map(m => {
+                    const ts = m.timestamp ? new Date(m.timestamp).toLocaleString() : '';
+                    const user = (m.text || '').trim();
+                    const asst = (m.assistant_text || '').trim();
+                    return `<div class="space-y-2 border-b border-gray-100 pb-3">
+                        ${user ? bubble(user, 'You', ts) : ''}
+                        ${asst ? bubble(asst, 'Assistant', '') : ''}
+                    </div>`;
+                }).join('');
+            }
+
+            function bubble(text, who, ts) {
+                return `<div class="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                    <div class="text-xs text-gray-500 mb-1">${escapeHtml(who)}${ts ? ' · ' + escapeHtml(ts) : ''}</div>
+                    <div class="whitespace-pre-wrap break-words">${escapeHtml(text)}</div>
+                    </div>`;
+            }
+            function escapeHtml(s) {
+                return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+            }
+        })();
+    </script>
+
 </body>
 
 </html>

@@ -5,13 +5,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException, status
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from urllib.parse import parse_qs
+import sqlalchemy as sa
 import uvicorn
 import webrtcvad
 
@@ -48,6 +49,10 @@ FILLER_PHRASES = {
     "thanks for watching",
     " Thanks for Watching ",
     "Thank you for watching.",
+    "Thank you for watching!",
+    "Thanks for watching!",
+    "Thank you. Good.",
+    "Thanks for watching. Bye.",
     "I'll see you in the next video.",
     "Thank you very much.",
     "please like",
@@ -158,6 +163,7 @@ def list_history_db(db: Session, *, user_id, session_id):
         }
         for r in rows
     ]
+
 # ---------- Auth: routes ----------
 @fastapi.post("/auth/register")
 def register(payload: RegisterIn, db: Session = Depends(get_db)):
@@ -296,6 +302,68 @@ def get_chat_history(request: Request,
         }
         for r in rows
     ]
+
+@fastapi.get("/history/sessions")
+def list_user_sessions(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Return all distinct session IDs for this user, newest activity first."""
+    rows = (
+        db.query(
+            models.Transcript.session_id.label("session_id"),
+            sa.func.max(models.Transcript.created_at).label("last_created"),
+        )
+        .filter(
+            models.Transcript.user_id == user.id,
+            models.Transcript.session_id.isnot(None),
+            models.Transcript.session_id != "",
+        )
+        .group_by(models.Transcript.session_id)
+        .order_by(sa.desc(sa.func.max(models.Transcript.created_at)))
+        .all()
+    )
+    return {
+        "sessions": [
+            {
+                "session_id": r.session_id,
+                "last_created": r.last_created.isoformat() if r.last_created else None,
+            }
+            for r in rows
+        ]
+    }
+
+
+@fastapi.get("/history/transcripts")
+def transcripts_for_session(
+    session_id: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Return all messages for the selected session, oldest → newest."""
+    rows = (
+        db.query(models.Transcript)
+        .filter(
+            models.Transcript.user_id == user.id,
+            models.Transcript.session_id == session_id,
+        )
+        .order_by(models.Transcript.created_at.asc(), models.Transcript.id.asc())
+        .all()
+    )
+    return {
+        "session_id": session_id,
+        "messages": [
+            {
+                "id": str(r.id),
+                "timestamp": r.created_at.isoformat() if r.created_at else None,
+                "text": r.text or "",
+                "assistant_text": r.assistant_text or "",
+                "meta": r.meta or {},
+            }
+            for r in rows
+        ],
+    }
+
 
 # ---------------------- WebSocket: audio -> VAD -> process ----------------------
 @fastapi.websocket("/ws-audio")
